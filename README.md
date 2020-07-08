@@ -50,7 +50,7 @@ L'algoritmo prevede che ad ogni processo si invii la propria porzione di array d
 oppure 
 * delle `MPI_Isend` ed `MPI_Irecv`
 
- tutte le chiamate sono non bloccanti ed è servito per analizzare quale delle due implementazioni può risultare più conveniente, in termini di tempo.
+tutte le chiamate sono non bloccanti ed è servito per analizzare quale delle due implementazioni può risultare più conveniente, in termini di tempo.
 Siccome l'ordine di confronto tra le particelle, influisce sul risultato finale, si è scelto di attendere e  ricevere per ogni processo (in ordine) le sue particelle e poi di computare il *body force* su queste ultime, eseguendo un ciclo for per ogni processo (anche se può rallentare l'esecuzione totale dell'algoritmo).
 
 #### Implementazione generale
@@ -70,7 +70,7 @@ typedef struct
 ```
 suddividendo le componenti (x, y, z) della posizione della singola particella dalle componenti (vx, vy, vz) della velocità della stessa.
 
-Da linea di comando, al momento dell'esecuzione sono passati due valori `N` ed `I` che rappresentano il numero di elementi (particelle) degli array e il numero di iterazioni da computare.
+Da linea di comando, al momento dell'esecuzione sono passati due valori `N` ed `I` che rappresentano rispettivamente il numero di elementi (particelle) degli array e il numero di iterazioni da computare.
 
 Per generare le posizioni e le velocità, la funzione `rand` è stata inizializzato con un seme con la funzione `srand(42)` in modo da avere ad ogni test, i medesimi valori delle componenti.
 
@@ -94,7 +94,7 @@ void randomizeBodies(float *data, int n)
 }
 ```
 
-Dato che le funzioni MPI utilizzano, come formato di invio, direttamente le `struct`, bisogna fare il create della struttura e poi fare il commit ad MPI in questo modo
+Dato che le funzioni MPI possono utilizzare, come formato di invio, direttamente le `struct`, bisogna fare il create della struttura e poi fare il commit ad MPI in questo modo
 
 ```c
 MPI_Datatype bodies_datatype, old_types[1];
@@ -106,9 +106,9 @@ blockcounts[0] = 3;
 MPI_Type_create_struct(1, blockcounts, offset, old_types, &bodies_datatype);
 MPI_Type_commit(&bodies_datatype);
 ```
-in modo tale da avere 3 float per ogni elemento 'particella' sia per la poszione che per la velocità.
+in modo tale da avere 3 float per ogni elemento 'particella' sia per la posizione che per la velocità.
 
-Ogni processo poi calcola l'indice dell'array da cui partono e finiscono le particelle per ogni processo, con la funzione `calculateStartEnd`, così ogni processo sa dove sono posizionate le particelle degli altri processi.
+Ogni processo poi calcola l'indice dell'array da cui partono e finiscono le particelle per ogni processo, con la funzione `calculateStartEnd`, così ogni processo sa dove sono posizionate le particelle degli altri processi (in seguito capiremo perché).
 
 ```c
 void calculateStartEnd(int nBodies, int sizeProc, int *startIndexes, int *endIndexes)
@@ -166,7 +166,7 @@ Quando si sono computate tutte le iterazioni, ogni processo invia al processo co
 Ogni processo esegue un numero di iterazioni definite dall'utente all'inizio e passate da linea di comando.
 
 Si è scelto di implementare due soluzioni, al fine di analizzarle per definire quella che più si adatta e migliora l'algoritmo in termini di tempo e quindi di prestazioni.
-In entrambe le soluzioni, si è scelto di inviare solo la porzione di array relativa alle componenti delle posizioni, poiché per il calcolo del *body force*, ogni processo utilizza ( e servono) solo le posizioni delle altre particelle, per poi aggiornare le componenti velocità delle proprie.
+In entrambe le soluzioni, si è scelto di inviare solo la porzione di array relativa alle componenti delle posizioni, poiché, per il calcolo del *body force*, ogni processo utilizza (e servono) solo le posizioni delle altre particelle, per poi aggiornare le componenti velocità delle proprie.
 
 In un secondo momento si integrano le posizioni e le si aggiornano (componente per componente) utilizzando le velocità calcolate al punto precedente.
 
@@ -184,7 +184,7 @@ for (int root = 0; root < size; ++root)
     }
 }
 ```
-Nel primo `if` si entra quando il ciclo si è "fermato" al rank del processo che sta eseguendo il cìclo, in questo caso si invia tramite broadcasting in maniera non bloccante la propria porzione dell'array di posizioni, altrimenti se il ciclo si è "fermato" sul rank di un qualsiasi altro processo, tramite la funzione, ricevo in maniera non bloccante le altre porzioni di array.
+Nel primo `if` si entra quando il ciclo si è "fermato" al rank del processo che sta eseguendo il cìclo, in questo caso si invia tramite broadcasting in maniera non bloccante la propria porzione dell'array di posizioni, altrimenti se il ciclo si è "fermato" sul rank di un qualsiasi altro processo, tramite la funzione, ricevo in maniera non bloccante le altre porzioni di array (dal processo con `rank = root`).
 
 La seconda versione, invece, utilizza le `MPI_Isend` e le `MPI_Irecv`.
 ```c
@@ -224,6 +224,7 @@ for (int i = startIndexes[rank]; i < endIndexes[rank]; i++)
 ```
 e poi si integrano le posizioni.
 Questo procedimento viene ripetuto per tutte le iterazioni.
+
 Per ogni iterazione, i processi inviano a tutti gli altri la propria porzione di array senza passare dal processo con `rank = 0`, il quale dovrebbe suddividere ed inviare agli altri gli elementi per ogni processi: ogni porcesso già ha la porzione di array da computare per la prossima iterazione, deve solo aspettare le particelle degli altri processi.
 
 #### Calcolo del *body force*
@@ -257,7 +258,7 @@ void bodyForce(pBody *p, vBody *v, float dt, int start, int end, int myStart, in
 }
 ```
 La funzione prende in input i due array che descrivono le particelle, un float, che è il time step, due indici di inizio e fine della porzione di particelle da confrontare e due indici di inizio e fine della porzione di particelle locali al processo.
-Per ognuna delle particelle associate al processo, si scorrono tutte le altre (due for annidati), identificate dalla porzione `start` ed `end` e per ogni componente, si calcola la differenza delle componenti, si sommano elevando le differenze al quadrato (aggiungendo un termine di *softening* predefinito) si calcola l'inverso della distanza e si estrae la radice dell'inverso. Poi la si eleva al cubo e si sommano il prodotto di questo cubo e la distanza sulla componente (ad un termine `F` diverso per ogni componente) per ogni particella confrontata. Calcolata questa somma per tutte le altre particelle, la si addiziona alla componente velocità moltiplicandolo prima per il time step.
+Per ognuna delle particelle associate al processo, si scorrono tutte le altre (due for annidati), identificate dalla porzione `start` ed `end` (qui si usano gli elementi dei due array `startIndexes` ed `endIndexes`) e per ogni componente, si calcola la differenza delle componenti, si sommano elevando le differenze al quadrato (aggiungendo un termine di *softening* predefinito) si calcola l'inverso della distanza e si estrae la radice dell'inverso. Poi la si eleva al cubo e si sommano il prodotto di questo cubo e la distanza sulla componente (ad un termine `F` diverso per ogni componente) per ogni particella confrontata. Calcolata questa somma per tutte le altre particelle, la si addiziona alla componente velocità moltiplicandolo prima per il time step.
 
 ## Risultati
 L'algoritmo è stato testato con un numero di elementi pari a 5000, 2500 e 1250 ed un numero di iterazioni pari a 500. 
@@ -308,6 +309,8 @@ I grafici che seguono sono suddivisi a seconda del numero di elementi che si tro
 Per ogni grafico, sono stati plottati entrambi i comportamenti (con HT e senza).
 
 Un'ulteriore sezione contiene i grafici riassuntivi suddivisi a loro volta secondo i due comportamenti.
+
+L'ultima sezione contiene i grafici comparativi sulla Strong Scalability e Weak Scalability utilizzando le send e receive oppure le broadcast con un numero di elementi negli array pari a 5000.
 #### Scalabilità debole
 ##### SIZE = 5000 I = 500
 <img src="./img/WS5000.png" style=" display: block;
@@ -436,7 +439,7 @@ Un'ulteriore sezione contiene i grafici riassuntivi suddivisi a loro volta secon
 Dai grafici si evince che, l'algoritmo proposto scala molto bene con valori di input elevati e numero di processi via via crescente ma solo senza l'utilizzo di hypertheading. 
 Trattandosi di un problema `embarrassing parallelizable`, per esecuzioni senza l'utilizzo di HT, si comporta molto meglio.
 
-Lanciando due processi sullo stesso core, le prestazioni vanno degradando perché si va a saturare la reale capacità di computazione del core ed anche l'efficienza e lo speedup ne risentono, passando da uno speedup di quasi 4 con 8 processi ad uno speedup di 3 con 32 processi in HT. L'efficienza rispecchia anch'essa lo speedup passando dal 90% con 3 processi a quasi il 10% con 32 processi in HT. Il picco di speedup lo si è avuto con l'utilizzo di 8 processi ma comunque si tratta di uno speedup abbastanza basso (circa 4). Mentre l'efficienza massima (senza prendere in considerazione l'esecuzione con singolo processo), si è avuto con 2 processi (circa il 99%). Anche la scalabilità debole mostra questi cambi repentini, dovuti ad una maggiore comunicazione tra processi con un andamento piuttosto lineare crescente progressivamente con il numero di processi. Questi risultati non possono che essere non veritieri, poiché il cluster in questione non è un cluster HPC ed in più non si possono fare delle considerazioni su tutto quello che non è specificato nelle specifiche tecniche delle macchine utilizzate. In più, essendo macchine in AWS, anche se riservate, ed essendo state noleggiate con crediti messi a disposizione con il programma *AWS Educate* che vengono eseguite in una sand-box, fanno pensare, che queste basse prestazioni siano dovute a tutto ciò e non alla implementazione dell'algoritmo.
+Lanciando due processi sullo stesso core, le prestazioni vanno degradando perché si va a saturare la reale capacità di computazione del core ed anche l'efficienza e lo speedup ne risentono, passando da uno speedup di quasi 4 con 8 processi ad uno speedup di 3 con 32 processi in HT. L'efficienza rispecchia anch'essa lo speedup passando dal 90% con 3 processi a quasi il 10% con 32 processi in HT. Il picco di speedup lo si è avuto con l'utilizzo di 8 processi ma comunque si tratta di uno speedup abbastanza basso (circa 4). Mentre l'efficienza massima (senza prendere in considerazione l'esecuzione con singolo processo), si è avuto con 2 processi (circa il 99%). Anche la scalabilità debole mostra questi cambi repentini, dovuti ad una maggiore comunicazione tra processi con un andamento piuttosto lineare crescente progressivamente con il numero di processi. Questi risultati non possono che essere non veritieri, poiché il cluster in questione non è un cluster HPC ed in più non si possono fare delle considerazioni su tutto quello che non è specificato nelle specifiche tecniche delle macchine utilizzate. In più, essendo macchine in AWS, anche se riservate, ed essendo state noleggiate con crediti messi a disposizione con il programma *AWS Educate* (vengono eseguite in una sand-box), fanno pensare, che queste basse prestazioni siano dovute a tutto ciò e non alla implementazione dell'algoritmo.
 
 Diverso è il discorso senza l'utilizzo di HT e le prestazione sono da considerare piuttosto accettabili. La scalabilità debole si mantiene quasi costante, per tutti i valori di input e numeri di processi con i quali viene eseguito l'algoritmo. Un cambiamento è stato osservato intorno ai 9 - 10 processi, ma comunque il tempo è ancora accettabile, mettendolo in confronto con il relativo tempo con HT. Con gli stessi valori in input, l'algoritmo scala molto bene, con l'aumentare del numero di processi, passando da quasi 200 secondi con un singolo processo (versione sequenziale) a 19 secondi con 16 processi. Ciò si evince anche dallo speedup, raggiungendo un massimo di 10 in corrispondenza di 16 processi (la crescita si mantiene in questo caso costante). L'efficienza è nettamente migliorata rispetto ad utilizzare l'HT raggiungendo soglie di 90% - 80% rispetto alla esecuzione sequenziale, decrescendo man mano fino a 65% con 16 processi.
 
